@@ -8,7 +8,6 @@ use std::{
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
-use protobuf::descriptor;
 use quote::ToTokens;
 use tonic_build::CodeGenBuilder;
 
@@ -301,11 +300,80 @@ impl Builder {
         self.compile_svc(&services);
     }
 
+    #[cfg(feature = "protobuf-v2")]
     fn build_file_descriptor_set(
         &self,
         protos: &[impl AsRef<Path>],
         includes: &[impl AsRef<Path>],
-    ) -> descriptor::FileDescriptorSet {
+    ) -> protobuf2::descriptor::FileDescriptorSet {
+        use protobuf2::Message;
+
+        let protoc = protobuf_src::protoc().display().to_string();
+        let mut cmd = std::process::Command::new(protoc);
+
+        let out_dir = if let Some(out_dir) = self.out_dir.as_ref() {
+            out_dir.clone()
+        } else {
+            PathBuf::from(std::env::var("OUT_DIR").unwrap())
+        };
+        let desc_file = format!("{}/mod.desc", out_dir.as_path().to_str().unwrap());
+        for i in includes {
+            cmd.arg(format!("-I{}", i.as_ref().to_str().unwrap()));
+        }
+        cmd.arg("--include_imports")
+            .arg("--include_source_info")
+            .arg("-o")
+            .arg(&desc_file);
+        for f in protos {
+            cmd.arg(f.as_ref().as_os_str());
+        }
+        println!("executing {:?}", cmd);
+        match cmd.status() {
+            Ok(e) if e.success() => {}
+            e => panic!("failed to generate descriptor set files: {:?}", e),
+        }
+
+        let desc_bytes = std::fs::read(&desc_file).unwrap();
+        let mut desc = protobuf2::descriptor::FileDescriptorSet::new();
+        
+        desc.merge_from_bytes(&desc_bytes).unwrap();
+        desc.check_initialized().unwrap();
+
+        desc
+    }
+
+    #[cfg(feature = "protobuf-v2")]
+    fn build_services(&self, fd: protobuf2::descriptor::FileDescriptorProto) -> Vec<Service> {
+        let package_name = &protobuf_path_to_rust_mod(fd.get_package());
+
+        let mut services = vec![];
+        for svc in &fd.service {
+            let build_method = |m: &protobuf2::descriptor::MethodDescriptorProto| Method {
+                name: rust_method_name_convention(m.get_name()),
+                route_name: m.get_name().to_owned(),
+                input_type: protobuf_path_to_rust_path(m.get_input_type()),
+                output_type: protobuf_path_to_rust_path(m.get_output_type()),
+                codec_path: self.codec_path.to_owned(),
+                client_streaming: m.get_client_streaming(),
+                server_streaming: m.get_server_streaming(),
+            };
+            let build_service = |svc: &protobuf2::descriptor::ServiceDescriptorProto| Service {
+                name: svc.get_name().to_owned(),
+                package: package_name.clone(),
+                methods: svc.method.iter().map(build_method).collect(),
+            };
+            services.push(build_service(svc));
+        }
+
+        services
+    }
+
+    #[cfg(feature = "protobuf-v3")]
+    fn build_file_descriptor_set(
+        &self,
+        protos: &[impl AsRef<Path>],
+        includes: &[impl AsRef<Path>],
+    ) -> protobuf::descriptor::FileDescriptorSet {
         protobuf_parse::Parser::new()
             .protoc()
             .inputs(protos)
@@ -341,8 +409,9 @@ impl Builder {
         }
     }
 
+    #[cfg(feature = "protobuf-v3")]
     /// Build services from the provided `FileDescriptorProto`.
-    fn build_services(&self, fd: descriptor::FileDescriptorProto) -> Vec<Service> {
+    fn build_services(&self, fd: protobuf::descriptor::FileDescriptorProto) -> Vec<Service> {
         let package_name = &protobuf_path_to_rust_mod(fd.package());
 
         let mut services = vec![];
@@ -356,7 +425,7 @@ impl Builder {
                 client_streaming: m.client_streaming(),
                 server_streaming: m.server_streaming(),
             };
-            let build_service = |svc: &descriptor::ServiceDescriptorProto| Service {
+            let build_service = |svc: &protobuf::descriptor::ServiceDescriptorProto| Service {
                 name: svc.name().to_owned(),
                 package: package_name.to_owned(),
                 methods: svc.method.iter().map(build_method).collect(),
