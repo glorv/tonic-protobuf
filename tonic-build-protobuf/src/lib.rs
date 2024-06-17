@@ -292,9 +292,9 @@ impl Builder {
     /// Generated services will be output into the directory specified by
     /// `out_dir` with files named specified by [`Builder::file_name`].
     pub fn compile(self, protos: &[impl AsRef<Path>], includes: &[impl AsRef<Path>]) {
-        let fds = self.build_file_descriptor_set(protos, includes);
+        let mut fds = self.build_file_descriptor_set(protos, includes);
         let mut services = vec![];
-        for fd in fds.file {
+        for fd in fds.get_file() {
             services.extend(self.build_services(fd));
         }
         self.compile_svc(&services);
@@ -343,11 +343,11 @@ impl Builder {
     }
 
     #[cfg(feature = "protobuf-v2")]
-    fn build_services(&self, fd: protobuf2::descriptor::FileDescriptorProto) -> Vec<Service> {
+    fn build_services(&self, fd: &protobuf2::descriptor::FileDescriptorProto) -> Vec<Service> {
         let package_name = &protobuf_path_to_rust_mod(fd.get_package());
 
         let mut services = vec![];
-        for svc in &fd.service {
+        for svc in fd.get_service() {
             let build_method = |m: &protobuf2::descriptor::MethodDescriptorProto| Method {
                 name: rust_method_name_convention(m.get_name()),
                 route_name: m.get_name().to_owned(),
@@ -360,7 +360,7 @@ impl Builder {
             let build_service = |svc: &protobuf2::descriptor::ServiceDescriptorProto| Service {
                 name: svc.get_name().to_owned(),
                 package: package_name.clone(),
-                methods: svc.method.iter().map(build_method).collect(),
+                methods: svc.get_method().iter().map(build_method).collect(),
             };
             services.push(build_service(svc));
         }
