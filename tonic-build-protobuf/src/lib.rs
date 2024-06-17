@@ -2,8 +2,7 @@
 
 use core::fmt;
 use std::{
-    fs,
-    path::{Path, PathBuf},
+    fs, io::Write, path::{Path, PathBuf}
 };
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -292,7 +291,7 @@ impl Builder {
     /// Generated services will be output into the directory specified by
     /// `out_dir` with files named specified by [`Builder::file_name`].
     pub fn compile(self, protos: &[impl AsRef<Path>], includes: &[impl AsRef<Path>]) {
-        let mut fds = self.build_file_descriptor_set(protos, includes);
+        let fds = self.build_file_descriptor_set(protos, includes);
         let mut services = vec![];
         for fd in fds.get_file() {
             services.extend(self.build_services(fd));
@@ -333,7 +332,7 @@ impl Builder {
             e => panic!("failed to generate descriptor set files: {:?}", e),
         }
 
-        let desc_bytes = std::fs::read(&desc_file).unwrap();
+        let desc_bytes = fs::read(&desc_file).unwrap();
         let mut desc = protobuf2::descriptor::FileDescriptorSet::new();
         
         desc.merge_from_bytes(&desc_bytes).unwrap();
@@ -397,6 +396,9 @@ impl Builder {
             servers: TokenStream::default(),
         };
 
+        let mut mod_bytes = String::new();
+        mod_bytes.push_str("\n");
+
         for service in services {
             generator.generate(service);
             let mut output = String::new();
@@ -404,8 +406,13 @@ impl Builder {
 
             let file_name = (file_name.0)(&service.package, &service.name);
             let mod_name = rust_mod_name_convention(&file_name);
-            let out_file = out_dir.join(&format!("{}.rs", mod_name));
+            let out_file = out_dir.join(&format!("{}.rs", &mod_name));
+            mod_bytes.push_str(&format!("pub mod {};\n", mod_name));
             fs::write(out_file, output).unwrap();
+        }
+        if mod_bytes != "\n" {
+            let mut f = fs::OpenOptions::new().append(true).open(out_dir.join("mod.rs")).unwrap();
+            f.write_all(mod_bytes.as_bytes()).unwrap();
         }
     }
 
