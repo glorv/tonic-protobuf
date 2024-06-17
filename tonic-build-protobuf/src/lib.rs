@@ -343,8 +343,8 @@ impl Builder {
 
     #[cfg(feature = "protobuf-v2")]
     fn build_services(&self, fd: &protobuf2::descriptor::FileDescriptorProto) -> Vec<Service> {
-        let package_name = &protobuf_path_to_rust_mod(fd.get_package());
-
+        //let package_name = &protobuf_path_to_rust_mod(fd.get_package());
+        let package_name = fd.get_name();
         let mut services = vec![];
         for svc in fd.get_service() {
             let build_method = |m: &protobuf2::descriptor::MethodDescriptorProto| Method {
@@ -358,7 +358,7 @@ impl Builder {
             };
             let build_service = |svc: &protobuf2::descriptor::ServiceDescriptorProto| Service {
                 name: svc.get_name().to_owned(),
-                package: package_name.clone(),
+                package: package_name.to_owned(),
                 methods: svc.get_method().iter().map(build_method).collect(),
             };
             services.push(build_service(svc));
