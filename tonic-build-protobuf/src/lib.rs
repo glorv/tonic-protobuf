@@ -396,9 +396,7 @@ impl Builder {
             servers: TokenStream::default(),
         };
 
-        let mut mod_bytes = String::new();
-        mod_bytes.push_str("\n");
-
+        let mut new_mods = std::collections::HashSet::new();
         for service in services {
             generator.generate(service);
             let mut output = String::new();
@@ -407,11 +405,20 @@ impl Builder {
             let file_name = (file_name.0)(&service.package, &service.name);
             let mod_name = rust_mod_name_convention(&file_name);
             let out_file = out_dir.join(&format!("{}.rs", &mod_name));
-            mod_bytes.push_str(&format!("pub mod {};\n", mod_name));
-            fs::write(out_file, output).unwrap();
+            //fs::write(out_file, output).unwrap();
+            let mut f = fs::OpenOptions::new().create(true).append(true).open(out_file).unwrap();
+            f.write_all(output.as_bytes()).unwrap();
+            new_mods.insert(mod_name);
         }
-        if mod_bytes != "\n" {
-            let mut f = fs::OpenOptions::new().append(true).open(out_dir.join("mod.rs")).unwrap();
+        if !new_mods.is_empty() {
+            let mut mod_bytes = String::new();
+            mod_bytes.push_str("\n");
+
+            for m in new_mods {
+                mod_bytes.push_str(&format!("pub mod {};\n", m));
+            }
+
+            let mut f = fs::OpenOptions::new().create(true).append(true).open(out_dir.join("mod.rs")).unwrap();
             f.write_all(mod_bytes.as_bytes()).unwrap();
         }
     }
