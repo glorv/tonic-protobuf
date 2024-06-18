@@ -2,7 +2,9 @@
 
 use core::fmt;
 use std::{
-    fs, io::Write, path::{Path, PathBuf}
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
 };
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -334,17 +336,55 @@ impl Builder {
 
         let desc_bytes = fs::read(&desc_file).unwrap();
         let mut desc = protobuf2::descriptor::FileDescriptorSet::new();
-        
+
         desc.merge_from_bytes(&desc_bytes).unwrap();
         desc.check_initialized().unwrap();
+        Self::patch_file_desc_set(&mut desc);
 
         desc
     }
 
+    // rust-protobuf use file name as the package name, so we need to replace all
+    // package name prefix with file name.
+    #[cfg(feature = "protobuf-v2")]
+    fn patch_file_desc_set(desc: &mut protobuf2::descriptor::FileDescriptorSet) {
+        for f in desc.mut_file().iter_mut() {
+            let file_name = f.get_name().split(".").next().unwrap().to_owned();
+            if file_name == f.get_package() {
+                continue;
+            }
+            let pkg_prefix = format!(".{}.", f.get_package());
+
+            for msg_type in f.mut_message_type().iter_mut() {
+                for field in msg_type.mut_field().iter_mut() {
+                    if let Some(new_name) =
+                        replace_package_prefix(field.get_type_name(), &pkg_prefix, &file_name)
+                    {
+                        field.set_type_name(new_name);
+                    }
+                }
+            }
+            for svc in f.mut_service().iter_mut() {
+                for method in svc.mut_method().iter_mut() {
+                    if let Some(new_name) =
+                        replace_package_prefix(method.get_input_type(), &pkg_prefix, &file_name)
+                    {
+                        method.set_input_type(new_name);
+                    }
+                    if let Some(new_name) =
+                        replace_package_prefix(method.get_output_type(), &pkg_prefix, &file_name)
+                    {
+                        method.set_output_type(new_name);
+                    }
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "protobuf-v2")]
     fn build_services(&self, fd: &protobuf2::descriptor::FileDescriptorProto) -> Vec<Service> {
-        //let package_name = &protobuf_path_to_rust_mod(fd.get_package());
-        let package_name = fd.get_name();
+        let package_name = &protobuf_path_to_rust_mod(fd.get_package());
+        // let package_name = fd.get_name();
         let mut services = vec![];
         for svc in fd.get_service() {
             let build_method = |m: &protobuf2::descriptor::MethodDescriptorProto| Method {
@@ -405,8 +445,12 @@ impl Builder {
             let file_name = (file_name.0)(&service.package, &service.name);
             let mod_name = rust_mod_name_convention(&file_name);
             let out_file = out_dir.join(&format!("{}.rs", &mod_name));
-            //fs::write(out_file, output).unwrap();
-            let mut f = fs::OpenOptions::new().create(true).append(true).open(out_file).unwrap();
+            // fs::write(out_file, output).unwrap();
+            let mut f = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(out_file)
+                .unwrap();
             f.write_all(output.as_bytes()).unwrap();
             new_mods.insert(mod_name);
         }
@@ -418,7 +462,11 @@ impl Builder {
                 mod_bytes.push_str(&format!("pub mod {};\n", m));
             }
 
-            let mut f = fs::OpenOptions::new().create(true).append(true).open(out_dir.join("mod.rs")).unwrap();
+            let mut f = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(out_dir.join("mod.rs"))
+                .unwrap();
             f.write_all(mod_bytes.as_bytes()).unwrap();
         }
     }
@@ -489,6 +537,17 @@ fn protobuf_path_to_rust_path(path: &str) -> String {
     rust_path.push_str("::");
     rust_path.push_str(&rust_struct_name_convention(last_item.unwrap()));
     rust_path
+}
+
+fn replace_package_prefix(target: &str, expected_prefix: &str, new_name: &str) -> Option<String> {
+    if !target.starts_with(expected_prefix) {
+        return None;
+    }
+    Some(format!(
+        ".{}.{}",
+        &new_name,
+        &target[expected_prefix.len()..]
+    ))
 }
 
 #[cfg(test)]
